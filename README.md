@@ -23,12 +23,11 @@ pip install -r requirements.txt
 
 ## 生成图表与表格
 
-1. 检查 `chart_generation_logic.jsonl` 是否覆盖所需图表（目前为 CH001–CH019，含 CH013A、CH016A、CH016B 等扩展编号，新加入的 CH016B 会输出“照明分区回路数据表”）。
-2. 确认 `报告数据_标准化.xlsx` 中的数据已经更新。
-3. 运行图表生成脚本：
+1.在 process_main.py 中设置输入文件.xlsx；
+2.运行图表生成脚本：
 
 ```
-python auto_chart_generator.py
+python process_main.py
 ```
 
 所有 PNG/XLSX 产物将输出到 `charts/generated/`。脚本已预设使用微软雅黑，确保坐标轴与标题可读。
@@ -63,5 +62,4 @@ python demo_bulid.py --output demo_report.docx
 - **Matplotlib 找不到字体**：安装微软雅黑或调整 `auto_chart_generator.py` 中的 `FONT_CANDIDATES`。
 - **报告中缺少图像**：检查 `charts/generated/` 是否存在形如 `CH0XX_*.png` 的文件。
 
-如需更复杂的分析或模板导出，可查看根目录下的辅助脚本（如 `generate_main.py`、`extract_docx_images.py` 等）。
 
