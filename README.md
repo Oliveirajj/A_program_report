@@ -1,65 +1,92 @@
 # 能效报告自动化工具
 
-该项目用于批量生成能效报告所需的图表/表格，并组装一个轻量级的 DOCX 示例报告。图表逻辑定义在 `chart_generation_logic.jsonl` 中，标准化数据存放在 `报告数据_标准化.xlsx`，根目录下的脚本会把这些输入转换为 PNG 图像、Excel 表格以及最终的 Word 文档。
+该项目在 Windows 环境下自动完成“数据 → 图表/表格 → 模板报告 → AI 分析文本 → `能耗报告_自动生成.docx`”的整套流程。输入数据由 `报告数据_标准化.xlsx` 与 `chart_generation_logic.jsonl` 描述，输出结果由脚本自动写入 Word 文档。
 
-## 环境要求
+---
 
-- Windows 平台上的 Python 3.10 及以上版本（脚本依赖 Windows 字体路径）
-- 建议安装的核心第三方库：
-  - `python-docx`
-  - `pandas`、`numpy`、`matplotlib`
-  - `openpyxl`
-- 请确保 `C:\Windows\Fonts` 中存在微软雅黑 (`msyh.ttc` 或 `msyh.ttf`)，以便 Matplotlib 与 python-docx 正确渲染中文。
+## 环境与依赖
 
-如需创建虚拟环境，可执行：
+- Windows 10/11 + Python 3.10 及以上版本（脚本依赖系统字体与 COM 字体路径）
+- 默认字体为微软雅黑，请确认 `C:\Windows\Fonts\msyh.ttc` 存在
+- 主要依赖：`python-docx`、`pandas`、`numpy`、`matplotlib`、`openpyxl`、`dashscope`、`python-dotenv`
 
-```
+```powershell
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-若暂时没有 `requirements.txt`，请手动安装上述依赖。
+> `text_generator.py` 会从 `.env` 中读取 `QWEN_API_KEY`，请在根目录创建 `.env` 并写入：
+>
+> ```
+> QWEN_API_KEY=your_dashscope_api_key
+> ```
 
-## 生成图表与表格
+---
 
-1.在 process_main.py 中设置输入文件.xlsx；
-2.运行图表生成脚本：
+## 关键输入文件
 
-```
-python process_main.py
-```
+- `chart_generation_logic.jsonl`：定义 CH 编号、中文标题、章节归属等图表元数据
+- `报告数据_标准化.xlsx`：生成所有图表/表格所需的指标数据
+- `附件6_报告模板_2.docx`（已抽取样式，用于 `demo_bulid.py` 中的字体尺寸配置）
 
-所有 PNG/XLSX 产物将输出到 `charts/generated/`。脚本已预设使用微软雅黑，确保坐标轴与标题可读。
+若逻辑或数据更新，请同步维护以上文件。
 
-## 构建示例报告
+---
 
-`demo_bulid.py` 会读取 JSONL 配置，按 `chapter_title` 聚合图表，并为每个图表挑选最合适的 PNG 插入到 Word 文件中。文档样式与 `附件6_报告模板_2.docx` 对齐：标题 15 磅、章节标题 14 磅、图表标题与正文 12 磅，均使用微软雅黑。
+## 一键生成 `能耗报告_自动生成.docx`
 
-```
-python demo_bulid.py --output demo_report.docx
-```
+1. **生成 CH 图表与表格**
+   ```powershell
+   python auto_chart_generator.py
+   ```
+   - 输出：`charts/generated/CHxxx_*.png` 与对应的 `.xlsx`
+   - 若需要自定义数据源或输出目录，可在脚本内调整参数
 
-可选参数：
+2. **按章节组装底稿 `demo_report.docx`**
+   ```powershell
+   python demo_bulid.py --logic-path chart_generation_logic.jsonl --chart-dir charts\generated --output demo_report.docx
+   ```
+   - 依据 JSONL 中的 `chapter_title` 分组，每个 CH 插入最匹配的 PNG
+   - 若缺图，会在文档中写入 `Image not found.` 便于核对
 
-- `--logic-path PATH`：指定其他 JSONL 配置文件。
-- `--chart-dir PATH`：改为读取指定目录下的 PNG。
-- `--output PATH`：自定义输出 DOCX 路径。
+3. **AI 生成章节分析并插回图表**
+   ```powershell
+   python text_gen.py `
+     -i demo_report.docx `
+     -o 能耗报告_自动生成.docx `
+     --chart-logic chart_generation_logic.jsonl `
+     --chart-dir charts\generated
+   ```
+   - `text_gen.py` 会逐章解析 `demo_report.docx`，调用 DashScope（qwen-vl-plus）生成正文
+   - 章节文本中的 `(CHxxx)` 标记会自动被替换成对应的图表图片；无需准备 `ref/` 参考图
+   - 若章节正文为空，会回退到模板提示词（`text_generator.get_template_guidance`）
 
-若图像缺失，脚本会在文档中标注 “Image not found.” 以便排查。
+完成后，`能耗报告_自动生成.docx` 即包含：
+- 章节级别的生成式分析文字
+- 自动清理的旧图表/标题
+- 依据 `(CHxxx)` 标记重新插入的最新图表
 
-## 项目结构
+---
 
-- `auto_chart_generator.py`：负责调度数据、导出图表/表格。
-- `demo_bulid.py`：按照模板样式组装 DOCX 示例报告。
-- `charts/generated/`：存放按图表编号命名的 PNG/XLSX 结果。
-- `chart_generation_logic.jsonl`：驱动上述脚本的图表元数据。
-- `报告数据_标准化.xlsx`：已清洗的输入数据源。
+## 常见问题
 
-## 故障排查
+- **无法连接 DashScope**：确认 `.env` 中 `QWEN_API_KEY` 正确，并可通过 `pip show dashscope` 验证 SDK 安装
+- **图表缺失或编号对不上**：检查 `charts/generated/` 是否已有对应 `CHxxx` PNG；若文件名不规范，请参考 `demo_bulid.py` 中的 `find_chart_image`
+- **章节未生成文本**：确认 `demo_report.docx` 中该章节有可读段落，或在 `template_sections.json` 中补充模板提示
+- **字体/中文错乱**：安装/修复微软雅黑，重跑 `auto_chart_generator.py` 与 `demo_bulid.py`
 
-- **Word 中文字体异常**：确认已安装微软雅黑并重新运行 `demo_bulid.py`。
-- **Matplotlib 找不到字体**：安装微软雅黑或调整 `auto_chart_generator.py` 中的 `FONT_CANDIDATES`。
-- **报告中缺少图像**：检查 `charts/generated/` 是否存在形如 `CH0XX_*.png` 的文件。
+---
 
+## 项目结构速览
+
+- `auto_chart_generator.py`：读取 `报告数据_标准化.xlsx` 并输出所有 CH 图表/表格
+- `demo_bulid.py`：按照章节将图表插入 DOCX 底稿
+- `text_gen.py`：生成章节文本并插入图表，产出最终报告
+- `text_generator.py`：封装 DashScope 接口、模板提示、章节上下文抽取
+- `chart_generation_logic.jsonl`：图表与章节映射
+- `charts/generated/`：所有 CH PNG + 数据表
+- 其他 `process_*.py` / `analyze_*.py`：为特殊场景准备的数据清洗与校验脚本（可按需参考）
+
+如需扩展模板或替换 AI 模型，可在 `text_generator.py` 中调整提示词或模型 ID，并在 README 中补充新的运行说明。
 
