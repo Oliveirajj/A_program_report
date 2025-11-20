@@ -26,6 +26,8 @@ import numpy as np
 import pandas as pd
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+import plotly.graph_objects as go
+from collections import deque
 
 # Configure matplotlib with fonts that support Chinese labels (SimHei is common)
 matplotlib.rcParams["font.family"] = "sans-serif"
@@ -994,6 +996,7 @@ class ChartGenerator:
             "CH008": self._generate_ch007,
             "CH009": self._generate_ch008,
             "CH010": self._generate_ch009,
+            "CH010A": self._generate_sankey,
             "CH011": self._generate_ch010,
             "CH012": self._generate_ch011,
             "CH013": self._generate_ch020,
@@ -1999,6 +2002,300 @@ class ChartGenerator:
             },
             alignments=alignments,
         )
+
+    def _generate_sankey(self, entry: ChartLogic) -> None:
+        """
+        Generate Sankey diagram showing energy flow distribution.
+        This method integrates the logic from sankey_build.py.
+        """
+        # ========== 1. 定义节点（含名称、颜色） ==========
+        nodes = [
+            {"name": "100%市政电力", "color": "purple"},
+            {"name": "公区能耗", "color": "purple"},
+            {"name": "租户能耗", "color": "pink"},
+            {"name": "业主信息机房", "color": "red"},
+            {"name": "热泵空调", "color": "purple"},
+            {"name": "多联机外机", "color": "purple"},
+            {"name": "照明", "color": "pink"},
+            {"name": "动力", "color": "red"},
+            {"name": "安防", "color": "blue"},
+            {"name": "变电所", "color": "blue"},
+            {"name": "充电桩", "color": "blue"},
+            {"name": "机械车库", "color": "black"},
+            {"name": "其他", "color": "gray"},
+            {"name": "风冷热泵1", "color": "orange"},
+            {"name": "风冷热泵3", "color": "orange"},
+            {"name": "风冷热泵2", "color": "orange"},
+            {"name": "风冷热泵4", "color": "orange"},
+            {"name": "循环水泵及卫生间排风", "color": "yellow"},
+            {"name": "1-2F展示厅空调外机", "color": "green"},
+            {"name": "1-2F营业厅空调外机", "color": "green"},
+            {"name": "1-2F公共区域空调外机", "color": "green"},
+            {"name": "6FK空调外机", "color": "green"},
+            {"name": "3F空调外机", "color": "green"},
+            {"name": "空调室内机", "color": "green"},
+            {"name": "内急照明", "color": "green"},
+            {"name": "应急照明带伸", "color": "green"},
+            {"name": "生活水泵", "color": "green"},
+            {"name": "送排风机", "color": "green"},
+            {"name": "电梯", "color": "green"}
+        ]
+
+        # 提取节点名称和颜色列表
+        node_names = [node["name"] for node in nodes]
+        node_colors = [node["color"] for node in nodes]
+
+        # ========== 2. 定义链接（含源、目标、数值、颜色） ==========
+        links = [
+            {"source": 0, "target": 1, "value": 45.7, "color": "purple"},
+            {"source": 0, "target": 2, "value": 42, "color": "pink"},
+            {"source": 0, "target": 3, "value": 12.3, "color": "red"},
+            {"source": 1, "target": 4, "value": 53.7, "color": "purple"},
+            {"source": 1, "target": 5, "value": 28.3, "color": "purple"},
+            {"source": 1, "target": 6, "value": 7.3, "color": "pink"},
+            {"source": 1, "target": 7, "value": 5.9, "color": "red"},
+            {"source": 1, "target": 8, "value": 2.3, "color": "blue"},
+            {"source": 1, "target": 9, "value": 0.6, "color": "blue"},
+            {"source": 1, "target": 10, "value": 0.9, "color": "blue"},
+            {"source": 1, "target": 11, "value": 0.2, "color": "black"},
+            {"source": 1, "target": 12, "value": 0.5, "color": "gray"},
+            {"source": 4, "target": 13, "value": 22.2, "color": "orange"},
+            {"source": 4, "target": 14, "value": 20.8, "color": "orange"},
+            {"source": 4, "target": 15, "value": 23.1, "color": "orange"},
+            {"source": 4, "target": 16, "value": 20.2, "color": "orange"},
+            {"source": 4, "target": 17, "value": 13.7, "color": "yellow"},
+            {"source": 5, "target": 18, "value": 3.4, "color": "green"},
+            {"source": 5, "target": 19, "value": 35.2, "color": "green"},
+            {"source": 5, "target": 20, "value": 8.2, "color": "green"},
+            {"source": 5, "target": 21, "value": 32.7, "color": "green"},
+            {"source": 5, "target": 22, "value": 20.6, "color": "green"},
+            {"source": 2, "target": 23, "value": 64.2, "color": "green"},
+            {"source": 2, "target": 24, "value": 1.3, "color": "green"},
+            {"source": 2, "target": 25, "value": 1.1, "color": "green"},
+            {"source": 2, "target": 26, "value": 1.4, "color": "green"},
+            {"source": 2, "target": 27, "value": 5.9, "color": "green"},
+            {"source": 2, "target": 28, "value": 80.1, "color": "green"}
+        ]
+
+        # ========== 3. 计算每个节点从根节点（100%市政电力）流入的百分比 ==========
+        def calculate_node_percentages(nodes, links, root_node_idx=0):
+            """
+            计算每个节点从根节点流入的百分比
+            
+            Args:
+                nodes: 节点列表
+                links: 链接列表
+                root_node_idx: 根节点索引（默认为0）
+            
+            Returns:
+                字典，键为节点索引，值为相对于根节点的百分比
+            """
+            # 初始化百分比字典，根节点为100%
+            percentages = {root_node_idx: 100.0}
+            
+            # 构建节点间的连接关系图（从源到目标的映射）
+            source_to_targets = {}
+            for link in links:
+                source = link["source"]
+                target = link["target"]
+                value = link["value"]
+                if source not in source_to_targets:
+                    source_to_targets[source] = []
+                source_to_targets[source].append({"target": target, "value": value})
+            
+            # 计算每个节点的总流出量（用于计算比例）
+            node_outflow = {}
+            for link in links:
+                source = link["source"]
+                value = link["value"]
+                if source not in node_outflow:
+                    node_outflow[source] = 0.0
+                node_outflow[source] += value
+            
+            # 使用广度优先搜索（BFS）从根节点开始计算百分比
+            queue = deque([root_node_idx])
+            
+            while queue:
+                current_node = queue.popleft()
+                current_percentage = percentages[current_node]
+                
+                # 如果当前节点有流出链接
+                if current_node in source_to_targets:
+                    # 计算当前节点的总流出量
+                    total_outflow = node_outflow.get(current_node, 0.0)
+                    
+                    if total_outflow > 0:
+                        # 遍历所有从当前节点流出的链接
+                        for link_info in source_to_targets[current_node]:
+                            target = link_info["target"]
+                            link_value = link_info["value"]
+                            
+                            # 计算目标节点相对于根节点的百分比
+                            # 百分比 = 当前节点百分比 * (链接值 / 当前节点总流出)
+                            target_percentage = current_percentage * (link_value / total_outflow)
+                            
+                            # 如果目标节点已经有百分比（可能有多条路径），取最大值
+                            if target in percentages:
+                                percentages[target] = max(percentages[target], target_percentage)
+                            else:
+                                percentages[target] = target_percentage
+                            
+                            # 将目标节点加入队列继续处理
+                            queue.append(target)
+            
+            return percentages
+
+        # 计算所有节点的百分比
+        node_percentages = calculate_node_percentages(nodes, links)
+
+        # ========== 4. 格式化节点标签（节点名 + 百分比% + 单位） ==========
+        def format_node_label(node_name, percentage, unit="市政电力"):
+            """
+            格式化节点标签
+            
+            Args:
+                node_name: 节点名称
+                percentage: 百分比值
+                unit: 单位（默认为"市政电力"）
+            
+            Returns:
+                格式化后的标签字符串
+            """
+            # 如果节点名已经包含"100%市政电力"，保持原样
+            if "100%市政电力" in node_name:
+                return "100% 市政电力"
+            
+            # 格式化百分比（保留1位小数）
+            percentage_str = f"{percentage:.1f}"
+            
+            # 组合标签：节点名 + 百分比% + 单位
+            return f"{node_name} {percentage_str}% {unit}"
+
+        # 更新节点标签
+        formatted_node_names = []
+        for idx, node in enumerate(nodes):
+            percentage = node_percentages.get(idx, 0.0)
+            formatted_name = format_node_label(node["name"], percentage)
+            formatted_node_names.append(formatted_name)
+
+        # ========== 调整链接值，使节点高度与从根节点的百分比成正比 ==========
+        def adjust_link_values_for_node_height(nodes, links, node_percentages):
+            """
+            调整链接值，使每个节点的流入值等于从根节点的百分比
+            这样节点高度就会与百分比成正比
+            
+            策略：
+            1. 对于从根节点流出的链接，直接设置为目标节点的百分比
+            2. 对于其他链接，保持相对比例，但确保目标节点的总流入等于其百分比
+            
+            Args:
+                nodes: 节点列表
+                links: 原始链接列表
+                node_percentages: 节点百分比字典
+            
+            Returns:
+                调整后的链接列表
+            """
+            adjusted_links = []
+            
+            # 计算每个节点的总流入量（原始值）
+            node_inflow = {}
+            for link in links:
+                target = link["target"]
+                value = link["value"]
+                if target not in node_inflow:
+                    node_inflow[target] = 0.0
+                node_inflow[target] += value
+            
+            # 计算每个节点的总流出量（原始值）
+            node_outflow = {}
+            for link in links:
+                source = link["source"]
+                value = link["value"]
+                if source not in node_outflow:
+                    node_outflow[source] = 0.0
+                node_outflow[source] += value
+            
+            for link in links:
+                source = link["source"]
+                target = link["target"]
+                original_value = link["value"]
+                color = link["color"]
+                
+                # 获取目标节点的百分比
+                target_percentage = node_percentages.get(target, 0.0)
+                
+                # 如果是根节点流出的链接，直接设置为目标节点的百分比
+                if source == 0:  # 根节点索引为0
+                    adjusted_value = target_percentage
+                else:
+                    # 对于其他链接，计算该链接在目标节点流入中的比例
+                    target_total_inflow = node_inflow.get(target, 1.0)
+                    if target_total_inflow > 0:
+                        # 该链接在目标节点总流入中的比例
+                        link_ratio_in_target = original_value / target_total_inflow
+                        # 调整后的值 = 目标节点百分比 * 该链接在目标节点流入中的比例
+                        adjusted_value = target_percentage * link_ratio_in_target
+                    else:
+                        adjusted_value = target_percentage
+                
+                adjusted_links.append({
+                    "source": source,
+                    "target": target,
+                    "value": adjusted_value,
+                    "color": color
+                })
+            
+            return adjusted_links
+
+        # 调整链接值
+        adjusted_links = adjust_link_values_for_node_height(nodes, links, node_percentages)
+
+        # 提取链接的源、目标、数值、颜色列表
+        link_sources = [link["source"] for link in adjusted_links]
+        link_targets = [link["target"] for link in adjusted_links]
+        link_values = [link["value"] for link in adjusted_links]
+        link_colors = [link["color"] for link in adjusted_links]
+
+        # ========== 5. 绘制桑基图 ==========
+        fig = go.Figure(data=[go.Sankey(
+            node=dict(
+                pad=20,
+                thickness=25,
+                line=dict(color="black", width=0.8),
+                label=formatted_node_names,  # 使用格式化后的节点标签
+                color=node_colors,
+                hovertemplate="节点: %{label}<br>占比: %{value}%<extra></extra>"  # hover时显示数值
+            ),
+            link=dict(
+                source=link_sources,
+                target=link_targets,
+                value=link_values,
+                color=link_colors,
+                hovertemplate="源: %{source.label}<br>目标: %{target.label}<br>占比: %{value}<extra></extra>"  # hover时显示数值
+            )
+        )])
+
+        fig.update_layout(
+            title_text=entry.chart_name or "\u80fd\u6d41\u5206\u5e03\u6851\u57fa\u56fe",
+            font_size=12,
+            width=1400,
+            height=900,
+            plot_bgcolor="white"
+        )
+
+        # 导出为PNG
+        output_path = self.output_dir / f"{entry.chart_id}_sankey.png"
+        try:
+            fig.write_image(str(output_path), width=1400, height=900)
+            print(f"[INFO] Generated {entry.chart_id} - {entry.chart_name} -> {output_path}")
+        except Exception as e:
+            print(f"[WARN] Failed to export {entry.chart_id} as PNG: {e}")
+            print(f"[INFO] Plotly may require kaleido package for PNG export. Install with: pip install kaleido")
+            # Fallback: save as HTML
+            html_path = self.output_dir / f"{entry.chart_id}_sankey.html"
+            fig.write_html(str(html_path))
+            print(f"[INFO] Saved as HTML instead: {html_path}")
 
 
     def _generate_lighting_scope_pie(
