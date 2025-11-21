@@ -1,6 +1,16 @@
 # 能效报告自动化工具
 
-该项目在 Windows 环境下自动完成“数据 → 图表/表格 → 模板报告 → AI 分析文本 → `能耗报告_自动生成.docx`”的整套流程。输入数据由 `报告数据_标准化.xlsx` 与 `chart_generation_logic.jsonl` 描述，输出结果由脚本自动写入 Word 文档。
+该项目在 Windows 环境下自动完成“数据 → 图表/表格 → 模板报告 → AI 分析文本 → `能耗报告_自动生成.docx`”的整套流程。输入数据由 `.xlsx` 与 `chart_generation_logic.jsonl` 描述，输出结果由脚本自动写入 Word 文档。
+
+## 快速上手
+
+1.准备好输入文件：附件6_报告模板_2.docx和附件7_报告数据分析_250625R1.xlsx，放入根目录下，本项目中的所有程序文件均放在同一文件夹下。
+
+2.运行process_main.py，自动生成图表
+
+3.运行demo_bulid.py，自动生成demo.docx
+
+4.运行text_gen.py，生成报告
 
 ---
 
