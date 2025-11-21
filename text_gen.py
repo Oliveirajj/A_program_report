@@ -4,22 +4,16 @@
 from __future__ import annotations
 
 import argparse
-import json
-import re
-from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.table import Table, _Cell
+from docx.table import Table
 from docx.text.paragraph import Paragraph
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Inches
 
 from extract_docx_images import detect_heading_level
-from demo_bulid import find_chart_image
 from text_generator import (
     extract_template_key,
     generate_analysis_text,
@@ -29,14 +23,6 @@ from text_generator import (
 # 样式配置（复用demo_bulid.py中的配置）
 FONT_FAMILY = "Microsoft YaHei"
 EAST_ASIA_FONT_FAMILY = "微软雅黑"
-BODY_SIZE_PT = 12
-DEFAULT_IMAGE_WIDTH_INCH = 6.0
-DEFAULT_CHART_LOGIC_PATH = Path("chart_generation_logic.jsonl")
-DEFAULT_CHART_DIR = Path("charts/generated")
-MARKER_PATTERN = re.compile(
-    r"[（(][^（）()]*?(?:参考图[A-Z]+|CH\d{3}[A-Z]?)(?:[^（）()]*?)[)）]"
-)
-MARKER_TOKEN_PATTERN = re.compile(r"(参考图[A-Z]+|CH\d{3}[A-Z]?)")
 
 
 class ChapterInfo:
@@ -58,92 +44,6 @@ def _chapter_title_to_key(title: str, fallback: Optional[str] = None) -> str:
     return key or (title or fallback or "")
 
 
-def _load_chart_logic_entries(logic_path: Path) -> List[dict]:
-    """读取图表逻辑定义文件"""
-    entries: List[dict] = []
-    if not logic_path.exists():
-        print(f"警告：图表逻辑文件不存在: {logic_path}")
-        return entries
-    with logic_path.open("r", encoding="utf-8") as file:
-        for line_no, raw_line in enumerate(file, start=1):
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                entries.append(json.loads(line))
-            except json.JSONDecodeError as exc:
-                print(f"  警告：解析图表逻辑第 {line_no} 行失败: {exc}")
-    return entries
-
-
-def _build_chart_maps(
-    logic_entries: List[dict],
-    chart_dir: Path,
-) -> Tuple[Dict[str, List[dict]], Dict[str, dict]]:
-    """构建章节对应的图表列表，以及CH编号到图片信息的索引"""
-    chapter_map: Dict[str, List[dict]] = defaultdict(list)
-    chart_lookup: Dict[str, dict] = {}
-    for entry in logic_entries:
-        chart_id = (entry.get("chart_id") or "").strip().upper()
-        if not chart_id:
-            continue
-        chart_name = entry.get("chart_name") or chart_id
-        chapter_title = entry.get("chapter_title") or entry.get("chapter") or ""
-        chapter_code = entry.get("chapter_code") or ""
-        chart_info: Dict[str, str] = {
-            "chart_id": chart_id,
-            "chart_name": chart_name,
-            "chapter_title": chapter_title,
-            "chapter_code": chapter_code,
-        }
-        try:
-            image_path = find_chart_image(chart_id, chart_dir)
-        except Exception:
-            image_path = None
-        if image_path and image_path.exists():
-            chart_info["path"] = str(image_path.resolve())
-        chapter_key = _chapter_title_to_key(chapter_title, chapter_code)
-        chapter_map[chapter_key].append(chart_info)
-        if "path" in chart_info:
-            chart_lookup[chart_id] = chart_info
-    return chapter_map, chart_lookup
-
-
-def _delete_paragraph(paragraph: Paragraph) -> None:
-    """删除段落"""
-    element = paragraph._element
-    parent = element.getparent()
-    if parent is not None:
-        parent.remove(element)
-
-
-def remove_chapter_chart_blocks(document: Document, chapter_title: str) -> int:
-    """删除章节内原有的图表标题与图片，返回删除段落数"""
-    heading_index: Optional[int] = None
-    for idx, para in enumerate(document.paragraphs):
-        heading_info = detect_heading_level(para)
-        if heading_info and heading_info[0] == 1 and heading_info[1] == chapter_title:
-            heading_index = idx
-            break
-    if heading_index is None:
-        return 0
-    end_index = len(document.paragraphs)
-    for idx in range(heading_index + 1, len(document.paragraphs)):
-        heading_info = detect_heading_level(document.paragraphs[idx])
-        if heading_info and heading_info[0] == 1:
-            end_index = idx
-            break
-    to_remove: List[Paragraph] = []
-    for para in document.paragraphs[heading_index + 1 : end_index]:
-        heading_info = detect_heading_level(para)
-        if heading_info and heading_info[0] >= 2 and heading_info[1].strip().upper().startswith("CH"):
-            to_remove.append(para)
-            continue
-        if _paragraph_has_image(para):
-            to_remove.append(para)
-    for para in to_remove:
-        _delete_paragraph(para)
-    return len(to_remove)
 
 
 def parse_document_chapters(doc_path: Path) -> List[ChapterInfo]:
@@ -248,8 +148,8 @@ def _extract_table_text(table: Table) -> str:
     return "\n".join(rows_text)
 
 
-def _prepare_analysis_paragraphs(analysis_text: str) -> List[Tuple[str, List[str]]]:
-    """拆分生成文本并抽取参考图标记"""
+def _prepare_analysis_paragraphs(analysis_text: str) -> List[str]:
+    """拆分生成文本为段落列表"""
     paragraphs: List[str] = []
     buffer: List[str] = []
     for line in analysis_text.splitlines():
@@ -261,26 +161,7 @@ def _prepare_analysis_paragraphs(analysis_text: str) -> List[Tuple[str, List[str
             buffer = []
     if buffer:
         paragraphs.append(" ".join(buffer))
-    
-    paragraph_entries: List[Tuple[str, List[str]]] = []
-    for para_text in paragraphs:
-        cleaned_text, markers = _extract_markers(para_text)
-        paragraph_entries.append((cleaned_text, markers))
-    return paragraph_entries
-
-
-def _extract_markers(paragraph_text: str) -> Tuple[str, List[str]]:
-    """从段落中删除(参考图X)标记并记录引用顺序"""
-    markers: List[str] = []
-
-    def _replacement(match: re.Match[str]) -> str:
-        labels = MARKER_TOKEN_PATTERN.findall(match.group(0))
-        markers.extend(label.strip() for label in labels)
-        return ""
-    
-    cleaned_text = MARKER_PATTERN.sub(_replacement, paragraph_text)
-    cleaned_text = re.sub(r"\s{2,}", " ", cleaned_text).strip()
-    return cleaned_text, markers
+    return paragraphs
 
 
 def _apply_body_style(paragraph: Paragraph, document: Document) -> None:
@@ -308,19 +189,6 @@ def _insert_paragraph_after(paragraph: Paragraph, text: str = "") -> Paragraph:
     return new_para
 
 
-def cleanup_orphan_markers(document: Document) -> int:
-    """移除文档中遗留的(参考图X)标记并返回清理数量"""
-    cleaned = 0
-    for para in document.paragraphs:
-        if not para.text:
-            continue
-        if MARKER_PATTERN.search(para.text):
-            new_text = MARKER_PATTERN.sub("", para.text).strip()
-            if new_text != para.text:
-                para.text = new_text
-                cleaned += 1
-                _apply_body_style(para, document)
-    return cleaned
 
 
 def find_insertion_point(
@@ -391,7 +259,6 @@ def insert_analysis_text(
     document: Document,
     chapter: ChapterInfo,
     analysis_text: str,
-    chart_lookup: Dict[str, dict],
 ) -> None:
     """
     在文档中插入分析文本
@@ -401,8 +268,8 @@ def insert_analysis_text(
         chapter: 章节信息
         analysis_text: 要插入的分析文本
     """
-    paragraphs_with_markers = _prepare_analysis_paragraphs(analysis_text)
-    if not paragraphs_with_markers:
+    paragraphs = _prepare_analysis_paragraphs(analysis_text)
+    if not paragraphs:
         print(f"  提示：章节 '{chapter.title}' 生成文本为空，跳过插入")
         return
 
@@ -412,57 +279,22 @@ def insert_analysis_text(
         print(f"警告：无法找到章节 '{chapter.title}' 的标题，跳过")
         return
     
-    inserted_entries: List[Tuple[Paragraph, List[str]]] = []
     if insert_para is None:
         anchor = heading_para
-        for text, markers in paragraphs_with_markers:
+        for text in paragraphs:
             new_para = _insert_paragraph_after(anchor, text)
+            _apply_body_style(new_para, document)
             anchor = new_para
-            inserted_entries.append((new_para, markers))
     else:
         anchor = insert_para
-        temp_entries: List[Tuple[Paragraph, List[str]]] = []
-        for text, markers in reversed(paragraphs_with_markers):
+        for text in reversed(paragraphs):
             new_para = anchor.insert_paragraph_before(text)
-            temp_entries.append((new_para, markers))
-        inserted_entries = list(reversed(temp_entries))
-    
-    for paragraph, markers in inserted_entries:
-        _apply_body_style(paragraph, document)
-        if not markers:
-            continue
-        current_anchor = paragraph
-        for marker in markers:
-            image_info = chart_lookup.get(marker.upper())
-            if not image_info:
-                print(f"  警告：未找到{marker}对应的CH图表，跳过插入")
-                continue
-            image_path = image_info.get("path")
-            if not image_path:
-                print(f"  警告：{marker}缺少可用的图片路径，跳过插入")
-                continue
-            image_para = _insert_paragraph_after(current_anchor)
-            _apply_body_style(image_para, document)
-            try:
-                run = image_para.add_run()
-                run.add_picture(image_path, width=Inches(DEFAULT_IMAGE_WIDTH_INCH))
-                image_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            except Exception as exc:
-                label = image_info.get("name") or image_info.get("chart_name") or "未知图片"
-                print(f"  警告：插入{marker}（{label}）失败: {exc}")
-                # 插入失败时移除空段落
-                parent = image_para._element.getparent()
-                if parent is not None:
-                    parent.remove(image_para._element)
-                continue
-            current_anchor = image_para
+            _apply_body_style(new_para, document)
 
 
 def process_document(
     input_path: Path,
     output_path: Path,
-    chart_logic_path: Path = DEFAULT_CHART_LOGIC_PATH,
-    chart_dir: Path = DEFAULT_CHART_DIR,
 ) -> None:
     """
     处理文档：解析章节，生成分析文本，插入文档
@@ -470,8 +302,6 @@ def process_document(
     Args:
         input_path: 输入文档路径（demo_report.docx）
         output_path: 输出文档路径
-        chart_logic_path: 图表逻辑定义文件路径
-        chart_dir: 图表图片目录
     """
     print(f"正在加载文档: {input_path}")
     document = Document(input_path)
@@ -480,20 +310,9 @@ def process_document(
     chapters = parse_document_chapters(input_path)
     print(f"找到 {len(chapters)} 个一级章节")
     
-    # 加载章节图表映射
-    print(f"正在读取图表逻辑: {chart_logic_path}")
-    chart_logic_entries = _load_chart_logic_entries(chart_logic_path)
-    chapter_chart_map, chart_lookup = _build_chart_maps(chart_logic_entries, chart_dir)
-    print(f"已关联 {len(chart_lookup)} 个CH图表资源")
-    
     # 为每个章节生成分析文本
     for i, chapter in enumerate(chapters, 1):
         print(f"\n处理章节 {i}/{len(chapters)}: {chapter.title}")
-        
-        # 移除模板中遗留的图表及标题
-        removed = remove_chapter_chart_blocks(document, chapter.title)
-        if removed:
-            print(f"  已移除 {removed} 个模板图表段落")
 
         # 提取章节内容
         chapter_content = extract_chapter_content(chapter, document)
@@ -509,13 +328,11 @@ def process_document(
         
         # 生成分析文本
         print(f"  正在生成分析文本...")
-        chapter_key = _chapter_title_to_key(chapter.title)
-        chapter_charts = chapter_chart_map.get(chapter_key, [])
         analysis_text = generate_analysis_text(
             chapter_title=chapter.title,
             chapter_content=chapter_content,
             reference_images=[],
-            chapter_charts=chapter_charts,
+            chapter_charts=[],
         )
         
         if analysis_text and not analysis_text.startswith("[文本生成失败"):
@@ -525,14 +342,9 @@ def process_document(
                 document,
                 chapter,
                 analysis_text,
-                chart_lookup,
             )
         else:
             print(f"  生成失败，跳过")
-    
-    cleaned_markers = cleanup_orphan_markers(document)
-    if cleaned_markers:
-        print(f"\n清理了 {cleaned_markers} 个残留的参考图标记")
     
     # 保存文档
     print(f"\n正在保存文档: {output_path}")
@@ -573,20 +385,6 @@ def main():
         help="输出的DOCX文件路径（默认: 能耗报告_自动生成.docx）"
     )
     
-    parser.add_argument(
-        "--chart-logic",
-        type=Path,
-        default=DEFAULT_CHART_LOGIC_PATH,
-        help="图表逻辑定义文件路径（默认: chart_generation_logic.jsonl）",
-    )
-
-    parser.add_argument(
-        "--chart-dir",
-        type=Path,
-        default=DEFAULT_CHART_DIR,
-        help="CH图表图片所在目录（默认: charts/generated）",
-    )
-    
     args = parser.parse_args()
     
     # 检查输入文件
@@ -598,8 +396,6 @@ def main():
         process_document(
             args.input,
             args.output,
-            chart_logic_path=args.chart_logic,
-            chart_dir=args.chart_dir,
         )
         return 0
     except Exception as e:
